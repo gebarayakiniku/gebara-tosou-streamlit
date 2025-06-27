@@ -304,4 +304,6 @@ st.subheader("材料別 必要数量")
 if st.session_state.total_construction_area > 0 and st.session_state.material_requirements_results:
     st.table(st.session_state.material_requirements_results)
 elif st.session_state.total_construction_area <= 0:
-    st.warning(
+    st.warning("総施工面積が0㎡のため、材料の必要数量は計算されません。エリア情報を入力してください。")
+else:
+    st.info("材料の必要数量が表示されます。")
