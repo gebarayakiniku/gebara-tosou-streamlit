@@ -1,5 +1,11 @@
 import streamlit as st
 import math
+from PIL import Image
+import pytesseract
+import re # reモジュールを追加
+
+# Tesseractのパスを設定 (Streamlit Cloudでは不要な場合が多いが、ローカルテスト用に残す)
+# pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
 
 # --- アプリケーションの状態を初期化 ---
 def initialize_state():
@@ -10,7 +16,7 @@ def initialize_state():
         }]
     if 'ninku_kijun' not in st.session_state:
         st.session_state.ninku_kijun = 15.0 # 人工計算基準値
-    if 'total_construction_area' not in st.session_state: # 変数名は 'total_painted_area' から変更済み
+    if 'total_construction_area' not in st.session_state:
         st.session_state.total_construction_area = 0.0
     if 'ninku_rounded' not in st.session_state:
         st.session_state.ninku_rounded = 0.0
@@ -31,7 +37,6 @@ def initialize_state():
                 "unit_name": defaults["unit_name"],
                 "coverage_per_unit": defaults["coverage_per_unit"]
             }
-    # 既存のmaterial_settingsに新しいデフォルト項目を追加・古い項目を削除するロジック
     else:
         current_material_keys = list(st.session_state.material_settings.keys())
         for key in current_material_keys:
@@ -46,11 +51,10 @@ def initialize_state():
             else:
                 pass
 
-
-    if 'material_requirements_results' not in st.session_state: # 計算結果格納用
+    if 'material_requirements_results' not in st.session_state:
         st.session_state.material_requirements_results = []
 
-initialize_state() # 起動時に初期化
+initialize_state()
 
 # --- 計算ロジック ---
 def calculate_area_for_single_area(area_data):
@@ -104,6 +108,38 @@ def calculate_all():
                 })
     st.session_state.material_requirements_results = results_data
 
+# --- OCR処理関数 ---
+def ocr_image_for_dimensions(image):
+    # 日本語OCRを有効にする場合は lang='jpn+eng' などと設定
+    # ただし、Streamlit CloudのTesseractに日本語言語パックがインストールされている必要があります
+    text = pytesseract.image_to_string(image, lang='eng') 
+    st.write("OCR結果 (生データ):")
+    st.code(text)
+    
+    extracted_h = 0.0
+    extracted_w_list = []
+
+    # Hの抽出 (例: H: 12.3 の形式を想定)
+    h_match = re.search(r'[Hh]:\s*([0-9.]+)', text)
+    if h_match:
+        try:
+            extracted_h = float(h_match.group(1))
+        except ValueError:
+            pass
+
+    # Wの抽出 (例: W: 12.3, 4.5, 6.7 の形式を想定)
+    # 複数行にわたるWの値を考慮し、全ての行からWを抽出
+    w_matches = re.findall(r'[Ww]:\s*([0-9.,\s]+)', text)
+    for match_str in w_matches:
+        # カンマやスペースで区切られた数値を個別に抽出
+        for val_str in re.findall(r'[0-9.]+', match_str):
+            try:
+                extracted_w_list.append(float(val_str))
+            except ValueError:
+                pass
+
+    return extracted_h, extracted_w_list
+
 # --- UIの描画 ---
 st.set_page_config(layout="wide")
 st.title("施工面積・人工計算 兼 材料必要数量計算アプリ")
@@ -134,8 +170,36 @@ with st.sidebar:
             st.warning("本当に全てのデータをクリアしますか？ もう一度ボタンを押すと実行されます。")
             st.session_state.confirm_clear = True
 
-
 st.header("1. 施工エリア情報入力")
+
+# --- 画像アップロードとOCR機能 ---
+st.subheader("画像からWとHを読み込む (OCR)")
+uploaded_file = st.file_uploader("平面詳細図の画像をアップロードしてください", type=["png", "jpg", "jpeg"])
+
+if uploaded_file is not None:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="アップロードされた画像", use_column_width=True)
+    
+    if st.button("OCRを実行してWとHを抽出"): # OCR実行ボタンを追加
+        extracted_h, extracted_w_list = ocr_image_for_dimensions(image)
+        
+        st.write(f"抽出された高さ H: {extracted_h:.2f} m")
+        st.write(f"抽出された長さ W: {extracted_w_list} m")
+
+        # 抽出された値を既存のエリア情報に自動入力するオプション
+        if st.session_state.areas:
+            st.session_state.areas[0]['height'] = extracted_h
+            # Wの値を既存のlengthsリストにできるだけ多く入力
+            for idx, val in enumerate(extracted_w_list):
+                if idx < len(st.session_state.areas[0]['lengths']):
+                    st.session_state.areas[0]['lengths'][idx] = val
+                else:
+                    break # lengthsリストのサイズを超える場合は停止
+            st.success("抽出された値をエリア1に自動入力しました。")
+            st.rerun() # UIを更新して自動入力された値を表示
+        else:
+            st.warning("エリア情報がありません。新しいエリアを追加してからOCR結果を自動入力できます。")
+
 for i, area_data in enumerate(st.session_state.areas):
     with st.container():
         st.markdown(f"---")
@@ -163,17 +227,14 @@ for i, area_data in enumerate(st.session_state.areas):
                 st.rerun()
 
         st.markdown("##### 長さ W (m) - 最大10箇所")
-        # ★W1, W2... の入力部分: 以下のコードで2行5列のグリッドに順番に配置されます
-        # W1 W2 W3 W4 W5
-        # W6 W7 W8 W9 W10
         cols_w = st.columns(5)
         for j in range(10):
-            with cols_w[j % 5]: # 0,1,2,3,4, 0,1,2,3,4 と列を選択
+            with cols_w[j % 5]:
                 current_length_val = area_data['lengths'][j]
                 if not isinstance(current_length_val, (int, float)):
                     current_length_val = 0.0
                 area_data['lengths'][j] = st.number_input(
-                    f"W{j+1}", # W1, W2, ... W10 とラベル表示
+                    f"W{j+1}",
                     min_value=0.0,
                     value=float(current_length_val),
                     step=0.1,
@@ -243,6 +304,4 @@ st.subheader("材料別 必要数量")
 if st.session_state.total_construction_area > 0 and st.session_state.material_requirements_results:
     st.table(st.session_state.material_requirements_results)
 elif st.session_state.total_construction_area <= 0:
-    st.warning("総施工面積が0㎡のため、材料の必要数量は計算されません。エリア情報を入力してください。")
-else:
-    st.info("材料の必要数量が表示されます。")
+    st.warning(
