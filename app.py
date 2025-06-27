@@ -112,7 +112,7 @@ def calculate_all():
 def ocr_image_for_dimensions(image):
     # 日本語OCRを有効にする場合は lang='jpn+eng' などと設定
     # ただし、Streamlit CloudのTesseractに日本語言語パックがインストールされている必要があります
-    text = pytesseract.image_to_string(image, lang='eng') 
+    text = pytesseract.image_to_string(image, lang=\'eng\')
     st.write("OCR結果 (生データ):")
     st.code(text)
     
